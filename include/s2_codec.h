@@ -5,7 +5,7 @@
 // encode (audio → codes) and decode (codes → audio) operations.
 // Direct port from ggml/examples/fish-speech-codec/main.cpp
 
-#include "ggml.h"
+#include "ggml-common.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
@@ -22,8 +22,8 @@ public:
     AudioCodec();
     ~AudioCodec();
 
-    // Load codec from GGUF (unified or standalone). gpu_device=-1 = CPU only.
-    bool load(const std::string & gguf_path, int32_t gpu_device = -1, int32_t gpu_device_type = -1);
+    // Load codec from GGUF (unified or standalone). vulkan_device=-1 = CPU only.
+    bool load(const std::string & gguf_path, int32_t vulkan_device = -1);
 
     // Encode mono float32 audio to VQ codes. Returns (num_codebooks, T) flattened row-major.
     bool encode(const float * audio, int32_t n_samples, int32_t n_threads,

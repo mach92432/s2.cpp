@@ -73,6 +73,12 @@ PromptTensor build_prompt(
             dst.insert(dst.end(), src.begin(), src.end());
         };
 
+        // sys_pre is empty, everything goes into sys_post
+        app(sys_post, tokenizer.encode("<|im_start|>system"));
+        app(sys_post, NEWLINE);
+        app(sys_post, tokenizer.encode("You are a helpful assistant."));
+        app(sys_post, { im_end_id });
+        app(sys_post, NEWLINE);
         app(sys_post, tokenizer.encode("<|im_start|>user"));
         app(sys_post, NEWLINE);
         app(sys_post, tokenizer.encode(text));
