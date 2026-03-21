@@ -8,13 +8,15 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # ---------------------------------------------------------------------------
 # Options
 # ---------------------------------------------------------------------------
+
 option(S2_VULKAN  "Build with Vulkan backend"  OFF)
 option(S2_CUDA    "Build with CUDA backend"    OFF)
 option(S2_METAL   "Build with Metal backend"   OFF)
 
 # ---------------------------------------------------------------------------
-# GGML (git submodule — not modified)
+# GGML
 # ---------------------------------------------------------------------------
+
 set(GGML_BUILD_TESTS  OFF CACHE BOOL "" FORCE)
 set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
@@ -28,11 +30,39 @@ if(S2_METAL)
     set(GGML_METAL ON CACHE BOOL "" FORCE)
 endif()
 
+set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+
 add_subdirectory(ggml)
+
+# ---------------------------------------------------------------------------
+# Crow (pour le serveur HTTP)
+# ---------------------------------------------------------------------------
+
+find_package(Crow REQUIRED)
+include_directories(${CROW_INCLUDE_DIRS})
+
+# ---------------------------------------------------------------------------
+# cxxopts (pour la gestion des arguments CLI)
+# ---------------------------------------------------------------------------
+
+# Cherche d'abord une installation système
+find_package(cxxopts QUIET)
+
+if(NOT cxxopts_FOUND)
+    # Si non trouvé, utilise FetchContent pour le télécharger automatiquement
+    include(FetchContent)
+    FetchContent_Declare(
+        cxxopts
+        GIT_REPOSITORY https://github.com/jarro2783/cxxopts.git
+        GIT_TAG        v3.2.1
+    )
+    FetchContent_MakeAvailable(cxxopts)
+endif()
 
 # ---------------------------------------------------------------------------
 # s2 executable
 # ---------------------------------------------------------------------------
+
 set(S2_SOURCES
     src/s2_audio.cpp
     src/s2_tokenizer.cpp
@@ -51,10 +81,14 @@ target_include_directories(s2 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${CMAKE_CURRENT_SOURCE_DIR}/ggml/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/ggml/src          # for ggml-common.h etc.
+    ${CMAKE_CURRENT_SOURCE_DIR}/ggml/src
 )
 
-target_link_libraries(s2 PRIVATE ggml)
+target_link_libraries(s2 PRIVATE
+    ggml
+    ${CROW_LIBRARIES}
+    cxxopts::cxxopts
+)
 
 if(S2_VULKAN)
     target_compile_definitions(s2 PRIVATE GGML_USE_VULKAN)
