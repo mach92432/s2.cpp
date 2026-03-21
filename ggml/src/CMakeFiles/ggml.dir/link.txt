@@ -1,0 +1,1 @@
+/usr/bin/c++ -fPIC -O3 -DNDEBUG -shared -Wl,-soname,libggml.so.0 -o libggml.so.0.9.8 "CMakeFiles/ggml.dir/ggml-backend-dl.cpp.o" "CMakeFiles/ggml.dir/ggml-backend-reg.cpp.o"  -Wl,-rpath,/mnt/intelligence/s2.cpp/s2.cpp/ggml/src:/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan: -ldl libggml-cpu.so.0.9.8 ggml-vulkan/libggml-vulkan.so.0.9.8 libggml-base.so.0.9.8 

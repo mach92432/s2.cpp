@@ -1,0 +1,7 @@
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build/CMakeFiles/vulkan-shaders-gen.dir
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build/CMakeFiles/edit_cache.dir
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build/CMakeFiles/rebuild_cache.dir
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build/CMakeFiles/list_install_components.dir
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build/CMakeFiles/install.dir
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build/CMakeFiles/install/local.dir
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build/CMakeFiles/install/strip.dir

@@ -1,0 +1,13 @@
+# Target labels
+ vulkan-shaders-gen
+# Source files and their labels
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/CMakeFiles/vulkan-shaders-gen
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/CMakeFiles/vulkan-shaders-gen.rule
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/CMakeFiles/vulkan-shaders-gen-complete.rule
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-stamp/vulkan-shaders-gen-build.rule
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-stamp/vulkan-shaders-gen-configure.rule
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-stamp/vulkan-shaders-gen-download.rule
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-stamp/vulkan-shaders-gen-install.rule
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-stamp/vulkan-shaders-gen-mkdir.rule
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-stamp/vulkan-shaders-gen-patch.rule
+/mnt/intelligence/s2.cpp/s2.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-stamp/vulkan-shaders-gen-update.rule
