@@ -63,14 +63,14 @@ No Python or PyTorch required. The binary links only against the ggml shared lib
 
 ## Building
 
-Clone with submodules (ggml is a submodule):
+Clone (ggml is NOT a submodule):
 
 ```bash
 git clone https://github.com/mach92432/s2.cpp.git
 cd s2.cpp
 ```
 
-### CPU only
+### CPU only (never tested)
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -92,16 +92,17 @@ The binary is produced at `build/s2`.
 
 ### Basic server launch for GPU Vulkan (ex: NVidia)
 
-Put model.gguf in s2.cpp directory
+Put model.gguf (or link) in s2.cpp directory
 Only for cloning put reference.wav and reference.txt in s2.cpp directory
 
 ```bash
-build/s2 -v 1 --codec-vulkan 1 -port 8081
+build/s2 -v 0 --codec-vulkan 0 -port 8081
 ```
 
-`-v 0` selects the first Vulkan device. The transformer runs on GPU; the audio codec always runs on GPU.
-`--codec-vulkan 0` selects the first Vulkan device for audio codec.
+`-v 0` selects the first Vulkan device. The transformer runs on GPU.
+`--codec-vulkan 0` selects the first Vulkan device for audio codec. It should be possible to use the CPU instead (not tested).
 `-port 8081` : port to listen
+The other basic options are hard-coded
 
 ### GPU inference via Vulkan with curl
 
@@ -113,38 +114,15 @@ curl -X POST http://localhost:8081/v1/tts \
   -o output.wav
 ```
 
-`--vulkan 0` selects the first Vulkan device. The transformer runs on GPU; the audio codec always runs on GPU.
 
-### GPU inference via CUDA
-
-```bash
-./build/s2 \
-  -m s2-pro-q6_k.gguf \
-  -t tokenizer.json \
-  -text "Text to synthesize." \
-  --cuda 0 \
-  -o output.wav
-```
-
-`--cuda 0` selects the first CUDA device. As with Vulkan, the transformer runs on GPU and the audio codec on CPU.
 
 ### All options
 
 | Flag | Default | Description |
 |---|---|---|
-| `-m`, `--model` | `model.gguf` | Path to GGUF model file |
-| `-t`, `--tokenizer` | `tokenizer.json` | Path to tokenizer.json |
-| `-text` | `"Hello world"` | Text to synthesize |
-| `-pa`, `--prompt-audio` | — | Reference audio file for voice cloning (WAV/MP3) |
-| `-pt`, `--prompt-text` | — | Transcript of the reference audio |
-| `-o`, `--output` | `out.wav` | Output WAV file path |
-| `--vulkan N` | — | Use Vulkan backend, device index N (e.g. `--vulkan 0`) |
-| `--cuda N` | — | Use CUDA backend, device index N (e.g. `--cuda 0`) |
-| `-threads N` | `4` | Number of CPU threads |
-| `-max-tokens N` | `512` | Max tokens to generate (~21s of audio per 440 tokens) |
-| `-temp F` | `0.7` | Sampling temperature |
-| `-top-p F` | `0.7` | Top-p nucleus sampling |
-| `-top-k N` | `30` | Top-k sampling |
+| `-v ` | Vulkan device id for Model (e.g. `-v 0`)|
+| `--codec-vulkan ` | Vulkan device id for Codec (e.g. `--codec-vulkan 0`) |
+| `-port ` | Server port ti listen (e.g. `-port 8081`) |
 
 ---
 
@@ -152,8 +130,9 @@ curl -X POST http://localhost:8081/v1/tts \
 
 | VRAM available | Recommended model |
 |---|---|
-| ≥ 10 GB | `q8_0` — near-lossless quality |
-| 6–9 GB | `q6_k` — good quality/size balance |
+| 8 GB | `Q3_k_m` — good quality/size balance |
+| 12 GB | `q8_0` — near-lossless quality |
+| 11 GB | `q6_k` — good quality/size balance |
 | < 6 GB | `f16` on CPU (slow) — no GPU variant at this quality level is currently available |
 
 VRAM usage at runtime is approximately equal to the file size (transformer weights only; codec runs on CPU).
