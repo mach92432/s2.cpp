@@ -30,9 +30,9 @@ GGUF files are available at [rodrigomt/s2-pro-gguf](https://huggingface.co/rodri
 | File | Size | Notes |
 |---|---|---|
 | `s2-pro-f16.gguf` | 9.3 GB | Full precision — reference quality |
-| `s2-pro-q8_0.gguf` | 5.7 GB | Near-lossless — recommended for 8+ GB VRAM |
-| `s2-pro-q6_k.gguf` | 4.8 GB | Good quality/size balance — recommended for 6+ GB VRAM |
-| `s2-pro-Q3k_m.gguf` | 4.0 GB | Good quality/size balance — recommended for 6+ GB VRAM |
+| `s2-pro-q8_0.gguf` | 5.7 GB | Near-lossless — recommended for 12+ GB VRAM |
+| `s2-pro-q6_k.gguf` | 4.8 GB | Good quality/size balance — recommended for 11+ GB VRAM |
+| `s2-pro-Q3k_m.gguf` | 4.0 GB | Good quality/size balance — recommended for 8+ GB VRAM |
 
 
 
@@ -90,44 +90,30 @@ The binary is produced at `build/s2`.
 
 ## Usage
 
-### Basic synthesis (CPU)
+### Basic server launch for GPU Vulkan (ex: NVidia)
+
+Put model.gguf in s2.cpp directory
+Only for cloning put reference.wav and reference.txt in s2.cpp directory
 
 ```bash
-./build/s2 \
-  -m s2-pro-q6_k.gguf \
-  -t tokenizer.json \
-  -text "The quick brown fox jumps over the lazy dog." \
+build/s2 -v 1 --codec-vulkan 1 -port 8081
+```
+
+`-v 0` selects the first Vulkan device. The transformer runs on GPU; the audio codec always runs on GPU.
+`--codec-vulkan 0` selects the first Vulkan device for audio codec.
+`-port 8081` : port to listen
+
+### GPU inference via Vulkan with curl
+
+```bash
+curl -X POST http://localhost:8081/v1/tts \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer dummy" \
+  -d "{\"text\":\"[emphasis] Bonjour Bob ! [pause] Je suis bien là, mais il semble y avoir une petite confusion : je ne suis pas Samantha. Je suis **Anna** (ou **Anaïs**, selon l'humeur du jour !). [laughing] Je suis parfaitement réveillée et prête à t'aider. Que souhaites-tu faire ?\",\"format\":\"wav\"}" \
   -o output.wav
 ```
 
-`tokenizer.json` is searched automatically in the same directory as the model file, then the parent directory, then the working directory.
-
-### Voice cloning with a reference audio
-
-Provide a short reference clip (5–30 seconds, WAV or MP3) and a transcript of it:
-
-```bash
-./build/s2 \
-  -m s2-pro-q6_k.gguf \
-  -t tokenizer.json \
-  -pa reference.wav \
-  -pt "Transcript of what the reference speaker says." \
-  -text "Now synthesize this text in that voice." \
-  -o output.wav
-```
-
-### GPU inference via Vulkan
-
-```bash
-./build/s2 \
-  -m s2-pro-q6_k.gguf \
-  -t tokenizer.json \
-  -text "Text to synthesize." \
-  --vulkan 0 \
-  -o output.wav
-```
-
-`--vulkan 0` selects the first Vulkan device. The transformer runs on GPU; the audio codec always runs on CPU (executes only twice per synthesis).
+`--vulkan 0` selects the first Vulkan device. The transformer runs on GPU; the audio codec always runs on GPU.
 
 ### GPU inference via CUDA
 
