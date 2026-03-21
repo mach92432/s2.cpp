@@ -3,7 +3,7 @@
 > **ALPHA — EXPERIMENTAL SOFTWARE**
 > This is an early-stage, community-built inference engine. Expect rough edges, missing features, and breaking changes. Not production-ready.
 
-**s2.cpp** — Fish Audio's S2 Pro Dual-AR text-to-speech model running locally via a pure C++/GGML inference engine with CPU, Vulkan, and CUDA GPU backends. No Python runtime required after build.
+**s2.cpp** — Fish Audio's S2 Pro Dual-AR text-to-speech model running locally via a pure C++/GGML inference engine with CPU, Vulkan backends. No Python runtime required after build.
 
 > **Built on Fish Audio S2 Pro**
 > The model weights are licensed under the Fish Audio Research License, Copyright © 39 AI, INC. All Rights Reserved.
@@ -15,7 +15,7 @@
 
 This repository contains:
 
-- **`s2.cpp`** — a self-contained C++17 inference engine built on [ggml](https://github.com/ggml-org/ggml), handling tokenization, Dual-AR generation, audio codec encode/decode, and WAV output with no Python dependency
+- **`s2.cpp`** — a self-contained C++17 inference engine built on [ggml](https://github.com/ggml-org/ggml), handling tokenization, Dual-AR generation, audio codec encode/decode, and WAV output throw API similar with Fish Audio API
 - **`tokenizer.json`** — Qwen3 BPE tokenizer with ByteLevel pre-tokenization
 - GGUF model files are **not included** here — see [Model variants](#model-variants) below
 
@@ -32,6 +32,9 @@ GGUF files are available at [rodrigomt/s2-pro-gguf](https://huggingface.co/rodri
 | `s2-pro-f16.gguf` | 9.3 GB | Full precision — reference quality |
 | `s2-pro-q8_0.gguf` | 5.7 GB | Near-lossless — recommended for 8+ GB VRAM |
 | `s2-pro-q6_k.gguf` | 4.8 GB | Good quality/size balance — recommended for 6+ GB VRAM |
+| `s2-pro-Q3k_m.gguf` | 4.0 GB | Good quality/size balance — recommended for 6+ GB VRAM |
+
+
 
 All variants include both the transformer weights and the audio codec in a single file.
 
@@ -44,8 +47,6 @@ All variants include both the transformer weights and the audio codec in a singl
 - CMake ≥ 3.14
 - C++17 compiler (GCC ≥ 10, Clang ≥ 11, MSVC 2019+)
 - For Vulkan GPU support: Vulkan SDK and `glslc`
-- For CUDA GPU support: CUDA Toolkit ≥ 12.4
-  - **MSVC 2019+ note:** MSVC 2019 and later require CUDA ≥ 12.4 when building GGML. Older CUDA versions will produce compiler compatibility errors; upgrade to 12.4+ to resolve them.
 
 ```bash
 # Ubuntu / Debian
@@ -53,10 +54,6 @@ sudo apt install cmake build-essential
 
 # Vulkan (optional, recommended for GPU acceleration on AMD/Intel/NVIDIA)
 sudo apt install vulkan-tools libvulkan-dev glslc
-
-# CUDA (optional, recommended for NVIDIA GPUs)
-# Install the CUDA Toolkit ≥ 12.4 from https://developer.nvidia.com/cuda-downloads
-```
 
 ### Runtime
 
@@ -69,7 +66,7 @@ No Python or PyTorch required. The binary links only against the ggml shared lib
 Clone with submodules (ggml is a submodule):
 
 ```bash
-git clone --recurse-submodules https://github.com/mach92432/s2.cpp.git
+git clone https://github.com/mach92432/s2.cpp.git
 cd s2.cpp
 ```
 
@@ -84,22 +81,6 @@ cmake --build build --parallel $(nproc)
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DS2_VULKAN=ON
-cmake --build build --parallel $(nproc)
-```
-
-### With CUDA GPU support
-
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DS2_CUDA=ON
-cmake --build build --parallel $(nproc)
-```
-
-### With both Vulkan and CUDA (select backend at runtime)
-
-You can compile with both backends enabled simultaneously and choose which one to use at runtime via `--vulkan` or `--cuda`:
-
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DS2_VULKAN=ON -DS2_CUDA=ON
 cmake --build build --parallel $(nproc)
 ```
 
