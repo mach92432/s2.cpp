@@ -133,9 +133,23 @@ curl -X POST http://localhost:8081/v1/tts \
 | 8 GB | `Q3_k_m` — good quality/size balance |
 | 12 GB | `q8_0` — near-lossless quality |
 | 11 GB | `q6_k` — good quality/size balance |
-| < 6 GB | `f16` on CPU (slow) — no GPU variant at this quality level is currently available |
+| 19 GB | `f16` — near-lossless quality |
 
-VRAM usage at runtime is approximately equal to the file size (transformer weights only; codec runs on CPU).
+VRAM usage at runtime is approximately double of the file size (because codec runs on GPU).
+
+## Benchmark
+
+The audio generation speed is approximately 0.8x on an RTX3090. 
+
+The speed is roughly the same regardless of the model.
+
+The sound quality remains acceptable for the smallest model. 
+
+Voice cloning works correctly. 
+
+Tags are respected. 
+
+Generating short texts often results in artifacts at the end. Whenever possible, long texts should be split into segments of at least 100 characters. 
 
 ---
 
@@ -153,11 +167,12 @@ Total: ~4.56B parameters.
 
 ## Implementation notes
 
-The C++ engine (`src/`) is built entirely on [ggml](https://github.com/ggml-org/ggml) (unmodified, pinned as a submodule). Key design decisions:
+The C++ engine (`src/`) is built entirely on [ggml](https://github.com/ggml-org/ggml) include in this code. Key design decisions:
 
+- **Reference audio** To avoid processing the reference audio during each request, it is processed at server startup and kept in memory.
 - **Separate persistent `gallocr` allocators** for Slow-AR and Fast-AR — each path keeps its own compute buffer, avoiding memory re-planning per token
 - **Temporary prefill allocator** — freed immediately after prefill, so the large compute buffer does not persist into the generation loop
-- **Codec on CPU** — the audio codec executes exactly twice per synthesis (encode reference + decode output), so running it on CPU has zero impact on generation throughput
+- **Codec on GPU** — the audio codec executes on codec-vulkan id.
 - **posix_fadvise(DONTNEED)** after mmap — releases the GGUF file from kernel page cache after weights are loaded to VRAM, preventing RAM duplication equal to the model file size
 - **Correct ByteLevel tokenization** — the GPT-2 byte-to-unicode table is applied before BPE, producing token IDs identical to the HuggingFace reference tokenizer
 
@@ -165,10 +180,10 @@ The C++ engine (`src/`) is built entirely on [ggml](https://github.com/ggml-org/
 
 ## Known limitations (alpha)
 
-- No streaming output — WAV is written only after full generation completes
+- No streaming output — WAV is return to the client only after full generation completes
 - No batch inference
 - Voice cloning quality depends heavily on reference audio length and SNR
-- Windows: CUDA and Vulkan backends are supported; when using MSVC 2019+, ensure CUDA ≥ 12.4 is installed before building
+- Windows is untested
 - macOS is untested
 
 ---
