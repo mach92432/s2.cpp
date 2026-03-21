@@ -69,7 +69,7 @@ No Python or PyTorch required. The binary links only against the ggml shared lib
 Clone with submodules (ggml is a submodule):
 
 ```bash
-git clone --recurse-submodules https://github.com/rodrigomatta/s2.cpp.git
+git clone --recurse-submodules https://github.com/mach92432/s2.cpp.git
 cd s2.cpp
 ```
 
