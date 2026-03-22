@@ -20,8 +20,6 @@ bool Pipeline::init(const PipelineParams & params) {
     // Déterminer les GPU
     int model_gpu = params.vulkan_device;
     int codec_gpu = params.codec_vulkan_device;
-    // Si codec_vulkan_device non spécifié, utiliser le même GPU que le modèle
-    if (codec_gpu < 0) codec_gpu = model_gpu;
 
     std::cout << "GPU assignment: model -> GPU " << model_gpu
               << ", codec -> GPU " << codec_gpu << std::endl;
@@ -42,22 +40,32 @@ bool Pipeline::init(const PipelineParams & params) {
     std::cout << "Model loaded on GPU " << model_gpu << "." << std::endl;
 
     // Charger le codec sur le GPU assigné, avec fallback
-    std::cout << "Loading codec on GPU " << codec_gpu << "..." << std::endl;
-    if (!codec_.load(params.model_path, codec_gpu)) {
-        std::cerr << "Pipeline warning: codec failed on GPU " << codec_gpu
-                  << ", trying GPU " << model_gpu << "." << std::endl;
-        if (!codec_.load(params.model_path, model_gpu)) {
-            std::cerr << "Pipeline warning: codec failed on GPU, falling back to CPU." << std::endl;
-            if (!codec_.load(params.model_path, -1)) {
-                std::cerr << "Pipeline error: could not load codec." << std::endl;
-                return false;
-            }
-            std::cout << "Codec loaded on CPU (fallback)." << std::endl;
+    std::cout << "Loading codec on device " << codec_gpu << "..." << std::endl;
+    bool codec_loaded = false;
+
+    if (codec_gpu >= 0) {
+        std::cout << "Trying codec on GPU " << codec_gpu << "..." << std::endl;
+        if (codec_.load(params.model_path, codec_gpu)) {
+            std::cout << "Codec loaded on GPU " << codec_gpu << "." << std::endl;
+            codec_loaded = true;
         } else {
-            std::cout << "Codec loaded on GPU " << model_gpu << " (shared)." << std::endl;
+            std::cout << "Codec failed on GPU " << codec_gpu << std::endl;
         }
-    } else {
-        std::cout << "Codec loaded on GPU " << codec_gpu << " (dedicated)." << std::endl;
+    }
+
+    if (!codec_loaded) {
+        std::cout << "Loading codec on CPU (RAM)..." << std::endl;
+        if (codec_.load(params.model_path, -1)) {
+            std::cout << "Codec successfully loaded on CPU (RAM)." << std::endl;
+            codec_loaded = true;
+        } else {
+            std::cerr << "Codec failed on CPU too!" << std::endl;
+        }
+    }
+
+    if (!codec_loaded) {
+        std::cerr << "Pipeline error: failed to load codec on any device." << std::endl;
+        return false;
     }
 
     // Synchroniser la config tokenizer avec le modèle

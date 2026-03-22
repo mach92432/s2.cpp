@@ -13,7 +13,7 @@ int main(int argc, char** argv) {
     params.vulkan_device = 0;
     params.codec_vulkan_device = 0;
     params.gen.n_threads = 4;
-    params.gen.max_new_tokens = 2048;
+    params.gen.max_new_tokens = 1024;
     params.gen.temperature = 0.7f;
     params.gen.top_p = 0.7f;
     params.gen.top_k = 30;
@@ -31,11 +31,11 @@ int main(int argc, char** argv) {
             params.vulkan_device = std::stoi(argv[++i]);
         } else if (arg == "--codec-vulkan" && i + 1 < argc) {
             params.codec_vulkan_device = std::stoi(argv[++i]);
-        } else if ((arg == "-p" || arg == "-port" || arg == "--port") && i + 1 < argc) {
+        } else if ((arg == "-p" || arg == "--port") && i + 1 < argc) {
             port = std::stoi(argv[++i]);
         } else if ((arg == "-threads" || arg == "--threads") && i + 1 < argc) {
             params.gen.n_threads = std::stoi(argv[++i]);
-        } else if ((arg == "-max-tokens" || arg == "--max-tokens") && i + 1 < argc) {
+        } else if ((arg == "--max-tokens") && i + 1 < argc) {
             params.gen.max_new_tokens = std::stoi(argv[++i]);
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: s2 [options]\n"
@@ -44,9 +44,9 @@ int main(int argc, char** argv) {
                       << "  -t, --tokenizer <path>   Path to tokenizer.json (default: tokenizer.json)\n"
                       << "  -v, --vulkan <device>    Vulkan device for model (default: 0)\n"
                       << "  --codec-vulkan <device>  Vulkan device for codec (default: 0)\n"
-                      << "  -p, -port, --port <N>    HTTP port (default: 8080)\n"
-                      << "  -threads, --threads <N>  CPU threads (default: 4)\n"
-                      << "  -max-tokens <N>          Max tokens to generate (default: 512)\n"
+                      << "  -p, --port <N>           HTTP port (default: 8080)\n"
+                      << "  --threads <N>            CPU threads (default: 12)\n"
+                      << "  --max-tokens <N>         Max tokens to generate (default: 1024)\n"
                       << std::endl;
             return 0;
         } else {
