@@ -13,13 +13,19 @@
 
 ## What this is
 
+This repository is a fork of https://github.com/rodrigomatta/s2.cpp which is currently a command-line script.
+
+This version of s2.cpp is an API server version, compatible with the Fish Audio API. On good GPUs, it can achieve real-time performance while taking advantage of quantized models. If needed, VRAM savings can be used to run multiple services simultaneously.
+
+Tested only with Nvidia GPU on Debian Linux platform.
+
 This repository contains:
 
 - **`s2.cpp`** — a self-contained C++17 inference engine built on [ggml](https://github.com/ggml-org/ggml), handling tokenization, Dual-AR generation, audio codec encode/decode, and WAV output throw API similar with Fish Audio API
 - **`tokenizer.json`** — Qwen3 BPE tokenizer with ByteLevel pre-tokenization
 - GGUF model files are **not included** here — see [Model variants](#model-variants) below
 
-The engine runs the full pipeline: text → tokens → Slow-AR transformer (with KV cache) → Fast-AR codebook decoder → audio codec → WAV file.
+The engine runs the full pipeline: text via API → tokens → Slow-AR transformer (with KV cache) → Fast-AR codebook decoder → audio codec → WAV file return via API.
 
 ---
 
@@ -29,10 +35,10 @@ GGUF files are available at [rodrigomt/s2-pro-gguf](https://huggingface.co/rodri
 
 | File | Size | Notes |
 |---|---|---|
-| `s2-pro-f16.gguf` | 9.3 GB | Full precision — reference quality |
+| `s2-pro-f16.gguf` | 9.3 GB | Full precision — reference quality 19+ GB VRAM |
 | `s2-pro-q8_0.gguf` | 5.7 GB | Near-lossless — recommended for 12+ GB VRAM |
 | `s2-pro-q6_k.gguf` | 4.8 GB | Good quality/size balance — recommended for 11+ GB VRAM |
-| `s2-pro-Q3k_m.gguf` | 4.0 GB | Good quality/size balance — recommended for 8+ GB VRAM |
+| `s2-pro-q3_k.gguf` | 4.0 GB | Good quality/size balance — recommended for 8+ GB VRAM |
 
 
 
@@ -51,9 +57,13 @@ All variants include both the transformer weights and the audio codec in a singl
 ```bash
 # Ubuntu / Debian
 sudo apt install cmake build-essential
+```
 
-# Vulkan (optional, recommended for GPU acceleration on AMD/Intel/NVIDIA)
+# Vulkan (optional, recommended for GPU acceleration on AMD/Intel/Nvidia)
+
+```bash
 sudo apt install vulkan-tools libvulkan-dev glslc
+```
 
 ### Runtime
 
@@ -70,12 +80,6 @@ git clone https://github.com/mach92432/s2.cpp.git
 cd s2.cpp
 ```
 
-### CPU only (never tested)
-
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel $(nproc)
-```
 
 ### With Vulkan GPU support
 
@@ -90,7 +94,7 @@ The binary is produced at `build/s2`.
 
 ## Usage
 
-### Basic server launch for GPU Vulkan (ex: NVidia)
+### Basic server launch for GPU Vulkan (ex: Nvidia)
 
 Put model.gguf (or link) in s2.cpp directory
 Only for cloning put reference.wav and reference.txt in s2.cpp directory
@@ -100,9 +104,9 @@ build/s2 -v 0 --codec-vulkan 0 -port 8081
 ```
 
 `-v 0` selects the first Vulkan device. The transformer runs on GPU.
-`--codec-vulkan 0` selects the first Vulkan device for audio codec. It should be possible to use the CPU instead (not tested).
-`-port 8081` : port to listen
-The other basic options are hard-coded
+`--codec-vulkan 0` selects the first Vulkan device for audio codec. It is possible to use the CPU instead whith `--codec-vulkan -1`.
+`--port 8081` : port to listen
+`--help` for other options
 
 ### GPU inference via Vulkan with curl
 
@@ -122,7 +126,7 @@ curl -X POST http://localhost:8081/v1/tts \
 |---|---|---|
 | `-v ` | Vulkan device id for Model (e.g. `-v 0`)|
 | `--codec-vulkan ` | Vulkan device id for Codec (e.g. `--codec-vulkan 0`) |
-| `-port ` | Server port ti listen (e.g. `-port 8081`) |
+| `--port ` | Server port ti listen (e.g. `--port 8081`) |
 
 ---
 
@@ -130,14 +134,18 @@ curl -X POST http://localhost:8081/v1/tts \
 
 | VRAM available | Recommended model |
 |---|---|
-| 8 GB | `Q3_k_m` — good quality/size balance |
-| 12 GB | `q8_0` — near-lossless quality |
+| 8 GB | `q3_k` — good quality/size balance |
 | 11 GB | `q6_k` — good quality/size balance |
+| 12 GB | `q8_0` — near-lossless quality |
 | 19 GB | `f16` — near-lossless quality |
 
 VRAM usage at runtime is approximately double of the file size (because codec runs on GPU).
 
 ## Benchmark
+
+For speed, I don't recommend using the CPU for the codec. Using the CPU for the codec doubles the total processing time.
+
+I suggest choosing a quantized version that can fit twice in the allocated VRAM. It's possible to use two GPUs.
 
 The audio generation speed is approximately 0.8x on an RTX3090. 
 
@@ -147,7 +155,7 @@ The sound quality remains acceptable for the smallest model.
 
 Voice cloning works correctly. 
 
-Tags are respected. 
+Tags may be less respected with high levels of quantization.
 
 Generating short texts often results in artifacts at the end. Whenever possible, long texts should be split into segments of at least 100 characters. 
 
@@ -172,7 +180,7 @@ The C++ engine (`src/`) is built entirely on [ggml](https://github.com/ggml-org/
 - **Reference audio** To avoid processing the reference audio during each request, it is processed at server startup and kept in memory.
 - **Separate persistent `gallocr` allocators** for Slow-AR and Fast-AR — each path keeps its own compute buffer, avoiding memory re-planning per token
 - **Temporary prefill allocator** — freed immediately after prefill, so the large compute buffer does not persist into the generation loop
-- **Codec on GPU** — the audio codec executes on codec-vulkan id.
+- **Codec on GPU or CPU** — the audio codec executes on codec-vulkan id. -1 value for CPU
 - **posix_fadvise(DONTNEED)** after mmap — releases the GGUF file from kernel page cache after weights are loaded to VRAM, preventing RAM duplication equal to the model file size
 - **Correct ByteLevel tokenization** — the GPT-2 byte-to-unicode table is applied before BPE, producing token IDs identical to the HuggingFace reference tokenizer
 
