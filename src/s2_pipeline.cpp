@@ -5,6 +5,7 @@
 #include <fstream>
 #include <algorithm>
 #include <chrono>
+#include <gguf.h>  // ← AJOUTE CETTE LIGNE
 
 namespace s2 {
 
@@ -20,6 +21,8 @@ bool Pipeline::init(const PipelineParams & params) {
     // Déterminer les GPU
     int model_gpu = params.vulkan_device;
     int codec_gpu = params.codec_vulkan_device;
+    // Si codec_vulkan_device non spécifié, utiliser le même GPU que le modèle
+    if (codec_gpu < 0) codec_gpu = model_gpu;
 
     std::cout << "GPU assignment: model -> GPU " << model_gpu
               << ", codec -> GPU " << codec_gpu << std::endl;
@@ -32,6 +35,7 @@ bool Pipeline::init(const PipelineParams & params) {
     }
 
     // Charger le modèle principal sur le GPU assigné
+    std::cout << "Loading model from: " << params.model_path << std::endl;
     std::cout << "Loading model on GPU " << model_gpu << "..." << std::endl;
     if (!model_.load(params.model_path, model_gpu)) {
         std::cerr << "Pipeline error: could not load model on GPU " << model_gpu << std::endl;
@@ -39,14 +43,21 @@ bool Pipeline::init(const PipelineParams & params) {
     }
     std::cout << "Model loaded on GPU " << model_gpu << "." << std::endl;
 
+    // NOUVEAU: Choisir le fichier pour le codec
+    std::string codec_path = params.codec_model_path.empty() 
+        ? params.model_path 
+        : params.codec_model_path;
+    
+    std::cout << "Loading codec from: " << codec_path << std::endl;
+
     // Charger le codec sur le GPU assigné, avec fallback
-    std::cout << "Loading codec on device " << codec_gpu << "..." << std::endl;
+    std::cout << "Loading codec on GPU " << codec_gpu << "..." << std::endl;
     bool codec_loaded = false;
 
     if (codec_gpu >= 0) {
         std::cout << "Trying codec on GPU " << codec_gpu << "..." << std::endl;
-        if (codec_.load(params.model_path, codec_gpu)) {
-            std::cout << "Codec loaded on GPU " << codec_gpu << "." << std::endl;
+        if (codec_.load(codec_path, codec_gpu)) {
+            std::cout << "Codec loaded on GPU " << codec_gpu << " (dedicated)." << std::endl;
             codec_loaded = true;
         } else {
             std::cout << "Codec failed on GPU " << codec_gpu << std::endl;
@@ -54,17 +65,15 @@ bool Pipeline::init(const PipelineParams & params) {
     }
 
     if (!codec_loaded) {
-        std::cout << "Loading codec on CPU (RAM)..." << std::endl;
-        if (codec_.load(params.model_path, -1)) {
-            std::cout << "Codec successfully loaded on CPU (RAM)." << std::endl;
+        std::cout << "Pipeline warning: codec failed on GPU, falling back to CPU." << std::endl;
+        if (codec_.load(codec_path, -1)) {
+            std::cout << "Codec loaded on CPU (fallback)." << std::endl;
             codec_loaded = true;
-        } else {
-            std::cerr << "Codec failed on CPU too!" << std::endl;
         }
     }
 
     if (!codec_loaded) {
-        std::cerr << "Pipeline error: failed to load codec on any device." << std::endl;
+        std::cerr << "Pipeline error: could not load codec from " << codec_path << std::endl;
         return false;
     }
 
@@ -254,6 +263,7 @@ bool Pipeline::synthesize_to_buffer(const PipelineParams & params, std::vector<c
         kv_cache_max_len_ = max_seq_len;
     } else {
         std::cout << "[INFO] Reusing KV cache (max_len=" << kv_cache_max_len_ << ")" << std::endl;
+    model_.reset();
     }
 
     auto t3 = std::chrono::steady_clock::now();

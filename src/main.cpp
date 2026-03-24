@@ -25,6 +25,8 @@ int main(int argc, char** argv) {
         std::string arg = argv[i];
         if ((arg == "-m" || arg == "--model") && i + 1 < argc) {
             params.model_path = argv[++i];
+        } else if (arg == "--model-codec" && i + 1 < argc) {
+            params.codec_model_path = argv[++i];
         } else if ((arg == "-t" || arg == "--tokenizer") && i + 1 < argc) {
             params.tokenizer_path = argv[++i];
         } else if ((arg == "-v" || arg == "--vulkan") && i + 1 < argc) {
@@ -41,6 +43,7 @@ int main(int argc, char** argv) {
             std::cout << "Usage: s2 [options]\n"
                       << "Options:\n"
                       << "  -m, --model <path>       Path to unified GGUF model (default: model.gguf)\n"
+                      << "  --model-codec <path>     Path to codec-only GGUF (optional)\n"
                       << "  -t, --tokenizer <path>   Path to tokenizer.json (default: tokenizer.json)\n"
                       << "  -v, --vulkan <device>    Vulkan device for model (default: 0)\n"
                       << "  --codec-vulkan <device>  Vulkan device for codec (default: 0)\n"
@@ -58,6 +61,7 @@ int main(int argc, char** argv) {
 
     std::cout << "Configuration:" << std::endl;
     std::cout << "  Model:        " << params.model_path << std::endl;
+    std::cout << "  Codec model:  " << (params.codec_model_path.empty() ? params.model_path : params.codec_model_path) << std::endl;
     std::cout << "  Tokenizer:    " << params.tokenizer_path << std::endl;
     std::cout << "  Model GPU:    " << params.vulkan_device << std::endl;
     std::cout << "  Codec GPU:    " << params.codec_vulkan_device << std::endl;

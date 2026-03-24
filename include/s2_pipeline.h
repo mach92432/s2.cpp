@@ -17,6 +17,7 @@ struct PipelineParams {
     // Paths
     std::string model_path;
     std::string tokenizer_path;
+    std::string codec_model_path;  // NOUVEAU: codec-only GGUF (optionnel)
 
     // Input
     std::string text;
@@ -48,11 +49,11 @@ private:
     SlowARModel model_;
     AudioCodec  codec_;
     bool initialized_ = false;
-    
+
     // ÉTAT KV CACHE - FIX FUITES MÉMOIRE
     bool        kv_cache_initialized_ = false;
     int32_t     kv_cache_max_len_     = 0;
-    
+
     // Reference audio and text management
     bool reference_loaded_ = false;
     std::string reference_embedding_;
