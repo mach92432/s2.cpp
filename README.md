@@ -103,6 +103,8 @@ Only for cloning put reference.wav and reference.txt in s2.cpp directory
 build/s2 -v 0 --codec-vulkan 0 -port 8081
 ```
 
+`--model model.gguf` to specify the path to a GGUF model (default model.gguf)
+`--model-codec` to specify the path to a GGUF model for 'codec' processing only. By default, it's the model specified by '--model' or 'model.gguf'. 
 `-v 0` selects the first Vulkan device. The transformer runs on GPU.
 `--codec-vulkan 0` selects the first Vulkan device for audio codec. It is possible to use the CPU instead whith `--codec-vulkan -1`.
 `--port 8081` : port to listen
