@@ -183,6 +183,18 @@ static ggml_tensor * lc_to_cl(ggml_context * ctx, ggml_tensor * x) {
 static ggml_tensor * causal_conv_1d(ggml_context * ctx,
                                      ggml_tensor * weight, ggml_tensor * bias,
                                      ggml_tensor * x, int stride, int dilation) {
+    if (weight->type != GGML_TYPE_F32) weight = ggml_cast(ctx, weight, GGML_TYPE_F32);
+    if (bias   && bias->type   != GGML_TYPE_F32) bias   = ggml_cast(ctx, bias,   GGML_TYPE_F32);
+    // Poids potentiellement aplati en 2D [in_ch*kernel, out_ch, 1] par la quantisation GGUF
+    // → reshaper en 3D [kernel, in_ch, out_ch] attendu par ggml_conv_1d
+    if (weight->ne[2] == 1 && weight->ne[0] > 1) {
+        const int64_t in_ch = x->ne[0];  // x est CL : ne[0] = canaux
+        if (in_ch > 1 && weight->ne[0] % in_ch == 0) {
+            const int64_t kernel = weight->ne[0] / in_ch;
+            const int64_t out_ch = weight->ne[1];
+            weight = ggml_reshape_3d(ctx, weight, kernel, in_ch, out_ch);
+        }
+    }
     const int kernel_size = static_cast<int>((weight->ne[0] - 1) * dilation + 1);
     const int pad   = kernel_size - stride;
     const int extra = static_cast<int>(extra_padding_for_conv1d(x->ne[1], kernel_size, stride, pad));
@@ -198,6 +210,16 @@ static ggml_tensor * causal_conv_transpose_1d(ggml_context * ctx,
                                                ggml_tensor * weight, ggml_tensor * bias,
                                                ggml_tensor * x, int stride, int crop_right) {
     if (weight->type != GGML_TYPE_F32) weight = ggml_cast(ctx, weight, GGML_TYPE_F32);
+    if (bias && bias->type != GGML_TYPE_F32) bias = ggml_cast(ctx, bias, GGML_TYPE_F32);
+    // Poids aplati 2D [kernel*out_ch, in_ch, 1] → reshape 3D [kernel, out_ch, in_ch]
+    if (weight->ne[2] == 1 && bias) {
+        const int64_t in_ch  = weight->ne[1];
+        const int64_t out_ch = bias->ne[0];
+        if (out_ch > 1 && weight->ne[0] % out_ch == 0) {
+            const int64_t kernel = weight->ne[0] / out_ch;
+            weight = ggml_reshape_3d(ctx, weight, kernel, out_ch, in_ch);
+        }
+    }
     ggml_tensor * x_lc = cl_to_lc(ctx, x);
     if (x_lc->type != GGML_TYPE_F32) x_lc = ggml_cast(ctx, x_lc, GGML_TYPE_F32);
     ggml_tensor * y = ggml_conv_transpose_1d(ctx, weight, x_lc, stride, 0, 1);
@@ -515,8 +537,16 @@ static std::vector<float> tensor_to_f32(ggml_tensor * t) {
         ggml_backend_tensor_get(t, tmp.data(), 0, n * sizeof(ggml_fp16_t));
         for (size_t i = 0; i < n; ++i) out[i] = ggml_fp16_to_fp32(tmp[i]);
     } else {
-        throw std::runtime_error("unsupported tensor type for host copy: " +
-                                 std::string(ggml_type_name(t->type)));
+        // Dequantification générique via ggml type traits (Q8_0, Q4_K, etc.)
+        const ggml_type_traits * tr = ggml_get_type_traits(t->type);
+        if (!tr || !tr->to_float) {
+            throw std::runtime_error("unsupported tensor type for host copy: " +
+                                     std::string(ggml_type_name(t->type)));
+        }
+        const size_t nbytes = ggml_nbytes(t);
+        std::vector<uint8_t> raw(nbytes);
+        ggml_backend_tensor_get(t, raw.data(), 0, nbytes);
+        tr->to_float(raw.data(), out.data(), static_cast<int64_t>(n));
     }
     return out;
 }
