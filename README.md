@@ -15,9 +15,13 @@
 
 This repository is a fork of https://github.com/rodrigomatta/s2.cpp which is currently a command-line script.
 
-This version of s2.cpp is an API server version, compatible with the Fish Audio API. On good GPUs, it can achieve real-time performance while taking advantage of quantized models. If needed, VRAM savings can be used to run multiple services simultaneously.
+This version of s2.cpp is an API server version, compatible with the Fish Audio API endpoint /v1/tts . On good GPUs, it can achieve real-time performance while taking advantage of quantized models. If needed, VRAM savings can be used to run multiple services simultaneously.
 
-Tested only with Nvidia GPU on Debian Linux platform.
+Tested only with Nvidia RTX GPU on Debian Linux platform using Vulkan.
+
+This version of s2.cpp offers less flexibility and fewer features than the original s2.cpp version.
+
+The two main areas of focus are reducing VRAM usage and maintaining the inference speed of the best configurations of the original model. This must be achieved while maintaining very high voice cloning quality and accurate intonation and tag reproduction. To achieve these two goals, our choices included using GPUs for the codec as well as loading the reference audio when the server was launched.
 
 This repository contains:
 
@@ -31,7 +35,25 @@ The engine runs the full pipeline: text via API → tokens → Slow-AR transform
 
 ## Model variants
 
-GGUF files are available at [rodrigomt/s2-pro-gguf](https://huggingface.co/rodrigomt/s2-pro-gguf) on Hugging Face.
+To reduce VRAM usage, new GGUFs were created. The transformer-only GGUFs were created from the full GGUFs from rodrigomt in the table below. The codec-only GGUFs are adaptations of the original codec.pth file to GGUF and quantized formats.
+
+GGUF files are available at [mach9243/s2-pro-gguf](https://huggingface.co/mach9243/s2-pro-gguf) on Hugging Face.
+
+| File | Size | Notes |
+|---|---|---|
+| `s2-pro-f16-transformer-only.gguf` | 9.2 GB | Full precision — reference quality |
+| `s2-pro-f16-codec-only.gguf` | 1.4 GB | Full precision — reference quality |
+| `s2-pro-q8_0-transformer-only.gguf` | 5.4 GB | Near-lossless |
+| `s2-pro-q8_0-codec-only.gguf` | 1.0 GB | Near-lossless |
+| `s2-pro-q4_k_m-transformer-only.gguf` | 2.8 GB | Good quality/size balance |
+| `s2-pro-q4_k_m-codec-only.gguf` | 1.0 GB | Good quality/size balance |
+
+To use these models, you must use together one of the transformer models (--model) and one of the codec models (--model-codec). The VRAM used is the sum of the 2 models plus a few hundred MB.
+
+In order to compare several samples generated with these model pairs, they were submitted to the HF page
+
+
+Rodrigomt's original GGUF files remain functional if needed. Files are available at [rodrigomt/s2-pro-gguf](https://huggingface.co/rodrigomt/s2-pro-gguf) on Hugging Face.
 
 | File | Size | Notes |
 |---|---|---|
