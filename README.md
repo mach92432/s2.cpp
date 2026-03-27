@@ -1,6 +1,6 @@
 # s2.cpp
 
-> **ALPHA — EXPERIMENTAL SOFTWARE**
+> **ALPHA — EXPERIMENTAL AND PROOF OF CONCEPT SOFTWARE**
 > This is an early-stage, community-built inference engine. Expect rough edges, missing features, and breaking changes. Not production-ready.
 
 **s2.cpp** — Fish Audio's S2 Pro Dual-AR text-to-speech model running locally via a pure C++/GGML inference engine with CPU, Vulkan backends. No Python runtime required after build.
@@ -52,6 +52,7 @@ All variants include both the transformer weights and the audio codec in a singl
 
 - CMake ≥ 3.14
 - C++17 compiler (GCC ≥ 10, Clang ≥ 11, MSVC 2019+)
+- Crow
 - For Vulkan GPU support: Vulkan SDK and `glslc`
 
 ```bash
