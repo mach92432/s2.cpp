@@ -120,14 +120,17 @@ The binary is produced at `build/s2`.
 ### Basic server launch for GPU Vulkan (ex: Nvidia)
 
 Put model.gguf (or link) in s2.cpp directory
+
+Put codec.gguf (or link) in s2.cpp directory
+
 Only for cloning put reference.wav and reference.txt in s2.cpp directory
 
 ```bash
-build/s2 -v 0 --codec-vulkan 0 -port 8081
+build/s2 -v 0 --codec-vulkan 0 --model-codec codec.gguf --port 8081
 ```
 
 `--model model.gguf` to specify the path to a GGUF model (default model.gguf)
-`--model-codec` to specify the path to a GGUF model for 'codec' processing only. By default, it's the model specified by '--model' or 'model.gguf'. 
+`--model-codec codec.gguf` to specify the path to a GGUF model for 'codec' processing only. By default, it's the model specified by '--model' or 'model.gguf'. 
 `-v 0` selects the first Vulkan device. The transformer runs on GPU.
 `--codec-vulkan 0` selects the first Vulkan device for audio codec. It is possible to use the CPU instead whith `--codec-vulkan -1`.
 `--port 8081` : port to listen
@@ -155,34 +158,24 @@ curl -X POST http://localhost:8081/v1/tts \
 
 ---
 
-## Choosing a model
-
-| VRAM available | Recommended model |
-|---|---|
-| 8 GB | `q3_k` — good quality/size balance |
-| 11 GB | `q6_k` — good quality/size balance |
-| 12 GB | `q8_0` — near-lossless quality |
-| 19 GB | `f16` — near-lossless quality |
-
-VRAM usage at runtime is approximately double of the file size (because codec runs on GPU).
 
 ## Benchmark
 
-For speed, I don't recommend using the CPU for the codec. Using the CPU for the codec doubles the total processing time.
+For speed, we don't recommend using the CPU for the codec. Using the CPU for the codec doubles the total processing time.
 
-I suggest choosing a quantized version that can fit twice in the allocated VRAM. It's possible to use two GPUs.
+I suggest choosing transformer and codec quantized version that can fit in the allocated VRAM. Only a few hundred MB will be used extra during inference. It's possible to use two GPUs.
 
-The audio generation speed is approximately 0.8x on an RTX3090. 
+The audio generation speed is approximately 0.8x on an RTX3090 (RTF 1.3). 
 
 The speed is roughly the same regardless of the model.
 
-The sound quality remains acceptable for the smallest model. 
+The sound quality remains acceptable for the smallest model . 
 
 Voice cloning works correctly. 
 
 Tags may be less respected with high levels of quantization.
 
-Generating short texts often results in artifacts at the end. Whenever possible, long texts should be split into segments of at least 100 characters. 
+Generating short texts often results in artifacts at the end. Whenever possible, long texts should be split into segments of at least 90 characters. 
 
 ---
 
@@ -218,6 +211,7 @@ The C++ engine (`src/`) is built entirely on [ggml](https://github.com/ggml-org/
 - Voice cloning quality depends heavily on reference audio length and SNR
 - Windows is untested
 - macOS is untested
+- Only Nvidia GPUs were tested with Vulkan. Other Vulkan-compatible GPUs were not tested.
 
 ---
 
