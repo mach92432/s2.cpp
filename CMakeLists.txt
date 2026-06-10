@@ -39,7 +39,6 @@ add_subdirectory(ggml)
 # ---------------------------------------------------------------------------
 
 find_package(Crow REQUIRED)
-include_directories(${CROW_INCLUDE_DIRS})
 
 # ---------------------------------------------------------------------------
 # cxxopts (pour la gestion des arguments CLI)
@@ -86,7 +85,7 @@ target_include_directories(s2 PRIVATE
 
 target_link_libraries(s2 PRIVATE
     ggml
-    ${CROW_LIBRARIES}
+    Crow::Crow
     cxxopts::cxxopts
 )
 
