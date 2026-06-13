@@ -1,4 +1,10 @@
 #include "../include/s2_model.h"
+#ifdef GGML_USE_CUDA
+#include "ggml-cuda.h"
+#endif
+#ifdef GGML_USE_VULKAN
+#include "ggml-vulkan.h"
+#endif
 #include <iostream>
 #include <vector>
 #include <cmath>
@@ -82,12 +88,17 @@ static ggml_tensor * last_token_view(ggml_context * ctx, ggml_tensor * x, int32_
 SlowARModel::SlowARModel() {}
 
 SlowARModel::~SlowARModel() {
+    if (sched_)           ggml_backend_sched_free(sched_);
     if (ctx_kv_)          ggml_free(ctx_kv_);
     if (kv_buf_)          ggml_backend_buffer_free(kv_buf_);
+    if (weights_.cpu_emb_ctx) ggml_free(weights_.cpu_emb_ctx);
+    if (weights_.cpu_emb_buf) ggml_backend_buffer_free(weights_.cpu_emb_buf);
     if (weights_.ctx_w)   ggml_free(weights_.ctx_w);
     if (weights_.model_buf) ggml_backend_buffer_free(weights_.model_buf);
+    if (prefill_allocr_)  ggml_gallocr_free(prefill_allocr_);
     if (fast_allocr_)     ggml_gallocr_free(fast_allocr_);
     if (allocr_)          ggml_gallocr_free(allocr_);
+    if (cpu_backend_ && cpu_backend_ != backend_) ggml_backend_free(cpu_backend_);
     if (backend_)         ggml_backend_free(backend_);
 }
 
@@ -97,13 +108,20 @@ SlowARModel::~SlowARModel() {
 
 bool SlowARModel::load(const std::string & gguf_path, int32_t vulkan_device) {
     if (vulkan_device >= 0) {
-#ifdef GGML_USE_VULKAN
+#ifdef GGML_USE_CUDA
+        backend_ = ggml_backend_cuda_init(static_cast<size_t>(vulkan_device));
+        if (!backend_) {
+            std::cerr << "[Model] CUDA init failed, falling back to CPU." << std::endl;
+        } else {
+            std::cerr << "[Model] Using CUDA backend." << std::endl;
+        }
+#elif defined(GGML_USE_VULKAN)
         backend_ = ggml_backend_vk_init(static_cast<size_t>(vulkan_device));
         if (!backend_) {
             std::cerr << "[Model] Vulkan init failed, falling back to CPU." << std::endl;
         }
 #else
-        std::cerr << "[Model] Vulkan not compiled, falling back to CPU." << std::endl;
+        std::cerr << "[Model] No GPU backend compiled, falling back to CPU." << std::endl;
 #endif
     }
     if (!backend_) {
@@ -114,8 +132,9 @@ bool SlowARModel::load(const std::string & gguf_path, int32_t vulkan_device) {
         return false;
     }
 
-    allocr_      = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_));
-    fast_allocr_ = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_));
+    allocr_         = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_));
+    fast_allocr_    = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_));
+    prefill_allocr_ = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_));
 
     struct gguf_init_params params = { /*no_alloc=*/true, /*ctx=*/&weights_.ctx_w };
     gguf_context * ctx_gguf = gguf_init_from_file(gguf_path.c_str(), params);
@@ -275,10 +294,23 @@ bool SlowARModel::load(const std::string & gguf_path, int32_t vulkan_device) {
         return false;
     }
 
-    // Allocate backend buffer for all weight tensors
+    // Allocate weight tensors — try GPU first, fall back to CPU
     weights_.model_buf = ggml_backend_alloc_ctx_tensors(weights_.ctx_w, backend_);
+    if (weights_.model_buf) {
+        std::cerr << "[Model] Weights allocated on GPU." << std::endl;
+    } else {
+        std::cerr << "[Model] GPU allocation failed, trying CPU..." << std::endl;
+        cpu_backend_ = ggml_backend_cpu_init();
+        if (cpu_backend_) {
+            weights_.model_buf = ggml_backend_alloc_ctx_tensors(weights_.ctx_w, cpu_backend_);
+            if (weights_.model_buf) {
+                std::cerr << "[Model] Weights on CPU, compute on CPU." << std::endl;
+                backend_ = cpu_backend_;
+            }
+        }
+    }
     if (!weights_.model_buf) {
-        std::cerr << "[Model] Failed to allocate backend buffer for weights." << std::endl;
+        std::cerr << "[Model] Failed to allocate weights on any backend." << std::endl;
         gguf_free(ctx_gguf);
         return false;
     }
@@ -332,6 +364,70 @@ bool SlowARModel::load(const std::string & gguf_path, int32_t vulkan_device) {
 
     std::cout << "[Model] Weights loaded. Total tensors: " << n_tensors << std::endl;
 
+    // Create CPU copies of all embedding tensors used by get_rows.
+    // CUDA's get_rows kernel rejects several quantized types (Q4_K among them),
+    // so when the model backend is CUDA we shadow each quantized embedding tensor
+    // on the CPU and feed lookup results into the graph as plain F32 inputs.
+    // Covers: main embeddings, codebook embeddings (slow AR), fast embeddings (fast AR).
+    if (!ggml_backend_is_cpu(backend_)) {
+        auto needs_cpu_copy = [](ggml_tensor * t) {
+            return t && t->type != GGML_TYPE_F16 && t->type != GGML_TYPE_F32;
+        };
+
+        const bool need_main     = needs_cpu_copy(weights_.embeddings);
+        const bool need_codebook = needs_cpu_copy(weights_.codebook_embeddings);
+        const bool need_fast     = needs_cpu_copy(weights_.fast_embeddings);
+
+        if (need_main || need_codebook || need_fast) {
+            // Each ggml_new_tensor needs ~ggml_tensor_overhead() bytes of meta;
+            // a 1 MiB slack is plenty for three tensors.
+            ggml_init_params cp = {
+                3 * ggml_tensor_overhead() + (1ull << 20), nullptr, true
+            };
+            weights_.cpu_emb_ctx = ggml_init(cp);
+
+            auto make_cpu_copy = [&](ggml_tensor * src) -> ggml_tensor * {
+                if (!needs_cpu_copy(src)) return nullptr;
+                return ggml_new_tensor(weights_.cpu_emb_ctx, src->type,
+                                       ggml_n_dims(src), src->ne);
+            };
+
+            weights_.embeddings_cpu          = make_cpu_copy(weights_.embeddings);
+            weights_.codebook_embeddings_cpu = make_cpu_copy(weights_.codebook_embeddings);
+            weights_.fast_embeddings_cpu     = make_cpu_copy(weights_.fast_embeddings);
+
+            const size_t total_mb =
+                (need_main     ? ggml_nbytes(weights_.embeddings)          : 0) / 1048576 +
+                (need_codebook ? ggml_nbytes(weights_.codebook_embeddings) : 0) / 1048576 +
+                (need_fast     ? ggml_nbytes(weights_.fast_embeddings)     : 0) / 1048576;
+            std::cerr << "[Model] Mirroring quantized embeddings on CPU ("
+                      << total_mb << " MB across "
+                      << (need_main + need_codebook + need_fast) << " tensors)..." << std::endl;
+
+            ggml_backend_t cpu_be = cpu_backend_ ? cpu_backend_ : ggml_backend_cpu_init();
+            weights_.cpu_emb_buf = ggml_backend_alloc_ctx_tensors(weights_.cpu_emb_ctx, cpu_be);
+
+            auto copy_to_cpu = [](ggml_tensor * src, ggml_tensor * dst) {
+                if (!src || !dst) return;
+                std::vector<uint8_t> tmp(ggml_nbytes(src));
+                ggml_backend_tensor_get(src, tmp.data(), 0, tmp.size());
+                ggml_backend_tensor_set(dst, tmp.data(), 0, tmp.size());
+            };
+
+            if (weights_.cpu_emb_buf) {
+                copy_to_cpu(weights_.embeddings,          weights_.embeddings_cpu);
+                copy_to_cpu(weights_.codebook_embeddings, weights_.codebook_embeddings_cpu);
+                copy_to_cpu(weights_.fast_embeddings,     weights_.fast_embeddings_cpu);
+                std::cerr << "[Model] CPU embedding mirrors ready." << std::endl;
+            } else {
+                std::cerr << "[Model] WARNING: failed to allocate CPU embedding buffer." << std::endl;
+            }
+            if (!cpu_backend_ && cpu_be) {
+                cpu_backend_ = cpu_be;  // keep alive for graph eval
+            }
+        }
+    }
+
     gguf_free(ctx_gguf);
     return true;
 }
@@ -341,11 +437,20 @@ bool SlowARModel::load(const std::string & gguf_path, int32_t vulkan_device) {
 // ---------------------------------------------------------------------------
 
 bool SlowARModel::init_kv_cache(int32_t max_seq_len) {
-    max_seq_len_ = max_seq_len;
-    n_past_      = 0;
-
+    // Transactional: build the new cache in locals and swap in only on
+    // success. A failed GROW must leave the existing cache fully usable
+    // (the pipeline clamps max_new_tokens and continues on it). The old
+    // code had three state bugs here: it updated max_seq_len_ before
+    // allocating (failed grow -> eval thinks capacity is bigger than the
+    // real buffer -> OOB), it overwrote ctx_kv_/memory_k_/v_ before the
+    // alloc (failed grow -> dangling tensors), and it never freed the old
+    // buffer on success (every grow leaked the previous KV cache on GPU).
     const int32_t dim = hparams_.embedding_length;
-    if (dim == 0) return true;
+    if (dim == 0) {
+        max_seq_len_ = max_seq_len;
+        n_past_      = 0;
+        return true;
+    }
 
     // head_dim: if attention_qk_norm, get from q_norm weight shape; else dim/head_count
     int32_t head_dim = 0;
@@ -364,23 +469,33 @@ bool SlowARModel::init_kv_cache(int32_t max_seq_len) {
         /*.mem_buffer =*/ nullptr,
         /*.no_alloc =*/ true,
     };
-    ctx_kv_ = ggml_init(p);
-    if (!ctx_kv_) {
+    ggml_context * new_ctx = ggml_init(p);
+    if (!new_ctx) {
         std::cerr << "[Model] Failed to init KV context." << std::endl;
         return false;
     }
 
-    memory_k_ = ggml_new_tensor_4d(ctx_kv_, GGML_TYPE_F16, head_dim, n_head_kv, max_seq_len, n_layer);
-    memory_v_ = ggml_new_tensor_4d(ctx_kv_, GGML_TYPE_F16, head_dim, n_head_kv, max_seq_len, n_layer);
+    ggml_tensor * new_k = ggml_new_tensor_4d(new_ctx, GGML_TYPE_F16, head_dim, n_head_kv, max_seq_len, n_layer);
+    ggml_tensor * new_v = ggml_new_tensor_4d(new_ctx, GGML_TYPE_F16, head_dim, n_head_kv, max_seq_len, n_layer);
 
-    kv_buf_ = ggml_backend_alloc_ctx_tensors(ctx_kv_, backend_);
-    if (!kv_buf_) {
+    ggml_backend_buffer_t new_buf = ggml_backend_alloc_ctx_tensors(new_ctx, backend_);
+    if (!new_buf) {
         std::cerr << "[Model] Failed to allocate KV cache buffer." << std::endl;
-        return false;
+        ggml_free(new_ctx);
+        return false;  // existing cache (if any) is untouched and still valid
     }
 
-    ggml_backend_tensor_memset(memory_k_, 0, 0, ggml_nbytes(memory_k_));
-    ggml_backend_tensor_memset(memory_v_, 0, 0, ggml_nbytes(memory_v_));
+    ggml_backend_tensor_memset(new_k, 0, 0, ggml_nbytes(new_k));
+    ggml_backend_tensor_memset(new_v, 0, 0, ggml_nbytes(new_v));
+
+    if (kv_buf_) ggml_backend_buffer_free(kv_buf_);
+    if (ctx_kv_) ggml_free(ctx_kv_);
+    ctx_kv_      = new_ctx;
+    kv_buf_      = new_buf;
+    memory_k_    = new_k;
+    memory_v_    = new_v;
+    max_seq_len_ = max_seq_len;
+    n_past_      = 0;
 
     return true;
 }
@@ -400,14 +515,29 @@ void SlowARModel::reset() {
 
 bool SlowARModel::prefill(const std::vector<int32_t> & flat_tokens, int32_t n_tokens,
                           int32_t n_threads, StepResult & result) {
-    // Use a temporary gallocr for prefill so the large compute buffer
-    // (sized for n_tokens) is freed immediately after, not kept for steps.
-    ggml_gallocr_t prefill_allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_));
-    if (!prefill_allocr) return false;
-    std::swap(allocr_, prefill_allocr);
-    bool ok = eval_cached(flat_tokens, n_tokens, n_threads, result);
-    std::swap(allocr_, prefill_allocr);
-    ggml_gallocr_free(prefill_allocr);
+    // Persistent prefill allocr (claimed by the startup warm-up, retained for
+    // the process lifetime) + CHUNKED evaluation: the compute buffer scales
+    // with the largest chunk, never the whole prompt, so an arbitrarily long
+    // prompt can no longer demand a fresh request-time allocation on a full
+    // card (the residual OOM class that remained after warm-up reservation).
+    // eval_cached advances n_past_ per call, so chunks append to the same KV
+    // sequence; the last chunk's logits/hidden are the prefill result.
+    const int32_t CHUNK = 128;
+    if (!prefill_allocr_) return false;
+    if (n_tokens <= 0) return false;
+    const int32_t stride = (int32_t)(flat_tokens.size() / (size_t)n_tokens); // num_cb + 1
+    std::swap(allocr_, prefill_allocr_);
+    bool ok = true;
+    int32_t done = 0;
+    while (done < n_tokens && ok) {
+        const int32_t n = std::min(CHUNK, n_tokens - done);
+        const std::vector<int32_t> batch(
+            flat_tokens.begin() + (size_t)done * stride,
+            flat_tokens.begin() + (size_t)(done + n) * stride);
+        ok = eval_cached(batch, n, n_threads, result);
+        done += n;
+    }
+    std::swap(allocr_, prefill_allocr_);
     return ok;
 }
 
@@ -501,29 +631,99 @@ bool SlowARModel::eval_cached(const std::vector<int32_t> & flat_tokens,
     ggml_tensor * semantic_ids   = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_tensor * positions      = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_tensor * semantic_mask  = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens);
+    ggml_set_input(positions);
+    ggml_set_input(semantic_mask);
     ggml_tensor * token_scale    = nullptr;
     if (hparams_.scale_codebook_embeddings) {
         token_scale = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens);
+        ggml_set_input(token_scale);
     }
 
-    ggml_tensor * x = ggml_get_rows(ctx0, weights_.embeddings, semantic_ids);
-    if (x->type != GGML_TYPE_F32) x = ggml_cast(ctx0, x, GGML_TYPE_F32);
+    // Main embedding lookup: done via raw CPU dequantization
+    std::vector<float> main_emb_result(n_tokens * dim, 0.0f);
+    if (weights_.embeddings_cpu) {
+        //std::fprintf(stderr, "[eval] CPU embedding lookup for %d tokens\n", n_tokens);
+        // Use GGML's type dequantize function directly on CPU tensor data
+        const uint8_t * emb_data = nullptr;
+        ggml_backend_tensor_get(weights_.embeddings_cpu, nullptr, 0, 0); // ensure accessible
+        // Each row is nb01 bytes of Q4_K data, dequantizes to dim floats
+        const size_t row_bytes = weights_.embeddings_cpu->nb[1];
+        std::vector<uint8_t> row_buf(row_bytes);
+        const auto dequant_fn = ggml_get_type_traits(weights_.embeddings_cpu->type)->to_float;
 
-    std::vector<ggml_tensor *> cb_id_tensors(hparams_.num_codebooks);
-    ggml_tensor * codebook_sum = nullptr;
-    for (int32_t cb = 0; cb < hparams_.num_codebooks; ++cb) {
-        ggml_tensor * ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
-        cb_id_tensors[cb] = ids;
-        ggml_tensor * emb = ggml_get_rows(ctx0, weights_.codebook_embeddings, ids);
-        if (emb->type != GGML_TYPE_F32) emb = ggml_cast(ctx0, emb, GGML_TYPE_F32);
-        codebook_sum = (codebook_sum == nullptr) ? emb : ggml_add(ctx0, codebook_sum, emb);
+        for (int32_t t = 0; t < n_tokens; ++t) {
+            const int32_t row_idx = semantic_vals[t];
+            if (row_idx < 0 || row_idx >= weights_.embeddings_cpu->ne[1]) continue;
+            // Read row from CPU buffer
+            ggml_backend_tensor_get(weights_.embeddings_cpu, row_buf.data(),
+                                    row_idx * row_bytes, row_bytes);
+            // Dequantize to float
+            dequant_fn(row_buf.data(), main_emb_result.data() + t * dim, dim);
+        }
     }
 
-    if (codebook_sum != nullptr) {
-        // Mask out codebook embeddings for non-semantic positions
-        codebook_sum = ggml_mul(ctx0, codebook_sum,
-                                ggml_repeat(ctx0, semantic_mask, codebook_sum));
-        x = ggml_add(ctx0, x, codebook_sum);
+    // x starts as the CPU-computed main embedding, loaded into the GPU graph.
+    // main_emb_input is the persistent placeholder we upload host data into;
+    // x is the running graph value that gets reassigned by subsequent ops.
+    // ggml_set_input is required for CUDA backends — without it gallocr treats
+    // the placeholder as a transient operand and never assigns it a buffer.
+    ggml_tensor * main_emb_input = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, dim, n_tokens);
+    ggml_set_input(main_emb_input);
+    ggml_tensor * x = main_emb_input;
+
+    // Codebook embeddings: in q4_k_m models these are also quantized, so CUDA's
+    // get_rows kernel can't handle them. When we have a CPU mirror, precompute the
+    // per-token sum-of-codebook-embeddings on the host and feed it as a single F32
+    // input tensor; otherwise fall back to the original graph-side get_rows loop
+    // (which is fine on the CPU backend).
+    std::vector<ggml_tensor *> cb_id_tensors;  // only populated in the graph-side path
+    ggml_tensor * codebook_sum_input = nullptr;
+    std::vector<float> codebook_sum_vals;
+
+    if (weights_.codebook_embeddings_cpu) {
+        codebook_sum_vals.assign(static_cast<size_t>(n_tokens) * dim, 0.0f);
+
+        const ggml_tensor * cb_t = weights_.codebook_embeddings_cpu;
+        const size_t row_bytes   = cb_t->nb[1];
+        const auto dequant_fn    = ggml_get_type_traits(cb_t->type)->to_float;
+        std::vector<uint8_t> row_buf(row_bytes);
+        std::vector<float>   row_dequant(dim);
+
+        for (int32_t cb = 0; cb < hparams_.num_codebooks; ++cb) {
+            for (int32_t t = 0; t < n_tokens; ++t) {
+                if (semantic_mask_vals[t] == 0.0f) continue;  // non-semantic tokens contribute nothing
+                const int32_t row_idx = cb_vals[cb][t];
+                if (row_idx < 0 || row_idx >= cb_t->ne[1]) continue;
+                ggml_backend_tensor_get(cb_t, row_buf.data(), row_idx * row_bytes, row_bytes);
+                dequant_fn(row_buf.data(), row_dequant.data(), dim);
+                float * dst = codebook_sum_vals.data() + static_cast<size_t>(t) * dim;
+                for (int32_t d = 0; d < dim; ++d) {
+                    dst[d] += row_dequant[d];
+                }
+            }
+        }
+
+        // Placeholder tensor; data is uploaded in the input-set phase below.
+        codebook_sum_input = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, dim, n_tokens);
+        ggml_set_input(codebook_sum_input);
+        x = ggml_add(ctx0, x, codebook_sum_input);
+    } else {
+        cb_id_tensors.resize(hparams_.num_codebooks);
+        ggml_tensor * codebook_sum = nullptr;
+        for (int32_t cb = 0; cb < hparams_.num_codebooks; ++cb) {
+            ggml_tensor * ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+            ggml_set_input(ids);
+            cb_id_tensors[cb] = ids;
+            ggml_tensor * emb = ggml_get_rows(ctx0, weights_.codebook_embeddings, ids);
+            if (emb->type != GGML_TYPE_F32) emb = ggml_cast(ctx0, emb, GGML_TYPE_F32);
+            codebook_sum = (codebook_sum == nullptr) ? emb : ggml_add(ctx0, codebook_sum, emb);
+        }
+
+        if (codebook_sum != nullptr) {
+            codebook_sum = ggml_mul(ctx0, codebook_sum,
+                                    ggml_repeat(ctx0, semantic_mask, codebook_sum));
+            x = ggml_add(ctx0, x, codebook_sum);
+        }
     }
     if (token_scale != nullptr) {
         x = ggml_mul(ctx0, x, ggml_repeat(ctx0, token_scale, x));
@@ -636,23 +836,44 @@ bool SlowARModel::eval_cached(const std::vector<int32_t> & flat_tokens,
         return false;
     }
 
-    ggml_backend_tensor_set(semantic_ids,  semantic_vals.data(), 0, n_tokens * sizeof(int32_t));
-    ggml_backend_tensor_set(positions,     pos_vals.data(),       0, n_tokens * sizeof(int32_t));
-    ggml_backend_tensor_set(semantic_mask, semantic_mask_vals.data(), 0, n_tokens * sizeof(float));
+    // Set input tensor data.
+    // gallocr only allocates tensors actually referenced by the graph; tensors
+    // marked as inputs but never consumed by any op are skipped. In the CPU
+    // mirror path the semantic mask is applied during the host-side dequant
+    // loop, so it never appears in the graph and ends up with a NULL buffer.
+    // Guarding every upload on tensor->buffer keeps both paths safe.
+    auto upload = [](ggml_tensor * t, const void * data, size_t bytes) {
+        if (t && t->buffer) ggml_backend_tensor_set(t, data, 0, bytes);
+    };
+
+    upload(main_emb_input, main_emb_result.data(),    n_tokens * dim * sizeof(float));
+    upload(positions,      pos_vals.data(),           n_tokens * sizeof(int32_t));
+    upload(semantic_mask,  semantic_mask_vals.data(), n_tokens * sizeof(float));
     if (token_scale) {
-        ggml_backend_tensor_set(token_scale, token_scale_vals.data(), 0, n_tokens * sizeof(float));
+        upload(token_scale, token_scale_vals.data(),  n_tokens * sizeof(float));
     }
-    for (int32_t cb = 0; cb < hparams_.num_codebooks; ++cb) {
-        ggml_backend_tensor_set(cb_id_tensors[cb], cb_vals[cb].data(), 0, n_tokens * sizeof(int32_t));
+    if (codebook_sum_input) {
+        upload(codebook_sum_input, codebook_sum_vals.data(),
+               codebook_sum_vals.size() * sizeof(float));
+    } else {
+        for (int32_t cb = 0; cb < hparams_.num_codebooks; ++cb) {
+            upload(cb_id_tensors[cb], cb_vals[cb].data(),
+                   n_tokens * sizeof(int32_t));
+        }
     }
 
-    if (ggml_backend_is_cpu(backend_)) {
-        ggml_backend_cpu_set_n_threads(backend_, n_threads);
-    }
-    if (ggml_backend_graph_compute(backend_, gf) != GGML_STATUS_SUCCESS) {
-        std::fprintf(stderr, "[eval_cached] compute failed\n");
-        ggml_free(ctx0);
-        return false;
+    // Compute
+    {
+        if (ggml_backend_is_cpu(backend_)) {
+            ggml_backend_cpu_set_n_threads(backend_, n_threads);
+        }
+        if (ggml_backend_graph_compute(backend_, gf) != GGML_STATUS_SUCCESS) {
+            std::fprintf(stderr, "[eval_cached] compute failed\n");
+            ggml_free(ctx0);
+            return false;
+        }
+        // Note: removed per-step CUDA sync — too slow. The root cause of the
+        // async crash needs investigation at the GGML graph level.
     }
 
     result.hidden.resize(dim);
@@ -713,6 +934,7 @@ bool SlowARModel::fast_decode(const std::vector<float> & hidden_in,
 
     // hidden input (from slow decoder)
     ggml_tensor * hidden0 = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams_.embedding_length, 1);
+    ggml_set_input(hidden0);
 
     // Optional project_in (not present for this model, but handle it)
     ggml_tensor * projected = (weights_.fast_project_in != nullptr)
@@ -723,18 +945,49 @@ bool SlowARModel::fast_decode(const std::vector<float> & hidden_in,
     }
 
     // Build sequence: [projected_hidden; prefix_embeddings]
+    // When the model backend is CUDA and fast_embeddings is quantized (Q4_K), the
+    // graph-side ggml_get_rows fails. Mirror the slow-AR pattern: dequantize the
+    // requested rows on the CPU and feed the result as a plain F32 input tensor.
     ggml_tensor * x = projected;
-    ggml_tensor * prefix_ids = nullptr;
+    ggml_tensor * prefix_ids       = nullptr;  // legacy graph-side path
+    ggml_tensor * prefix_emb_input = nullptr;  // CPU-precomputed path
+    std::vector<float> prefix_emb_vals;        // backing buffer for the upload
     if (!prefix_tokens.empty()) {
-        prefix_ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, (int64_t)prefix_tokens.size());
-        ggml_tensor * prefix_emb = ggml_get_rows(ctx0, weights_.fast_embeddings, prefix_ids);
-        if (prefix_emb->type != GGML_TYPE_F32) {
-            prefix_emb = ggml_cast(ctx0, prefix_emb, GGML_TYPE_F32);
+        if (weights_.fast_embeddings_cpu) {
+            const ggml_tensor * fe_t = weights_.fast_embeddings_cpu;
+            const int32_t fe_dim     = static_cast<int32_t>(fe_t->ne[0]);
+            const size_t row_bytes   = fe_t->nb[1];
+            const auto dequant_fn    = ggml_get_type_traits(fe_t->type)->to_float;
+
+            prefix_emb_vals.assign(prefix_tokens.size() * static_cast<size_t>(fe_dim), 0.0f);
+            std::vector<uint8_t> row_buf(row_bytes);
+
+            for (size_t i = 0; i < prefix_tokens.size(); ++i) {
+                const int32_t row_idx = prefix_tokens[i];
+                if (row_idx < 0 || row_idx >= fe_t->ne[1]) continue;
+                ggml_backend_tensor_get(fe_t, row_buf.data(), row_idx * row_bytes, row_bytes);
+                dequant_fn(row_buf.data(),
+                           prefix_emb_vals.data() + i * static_cast<size_t>(fe_dim),
+                           fe_dim);
+            }
+
+            prefix_emb_input = ggml_new_tensor_2d(
+                ctx0, GGML_TYPE_F32, fe_dim, (int64_t)prefix_tokens.size());
+            ggml_set_input(prefix_emb_input);
+            x = ggml_concat(ctx0, x, prefix_emb_input, 1);
+        } else {
+            prefix_ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, (int64_t)prefix_tokens.size());
+            ggml_set_input(prefix_ids);
+            ggml_tensor * prefix_emb = ggml_get_rows(ctx0, weights_.fast_embeddings, prefix_ids);
+            if (prefix_emb->type != GGML_TYPE_F32) {
+                prefix_emb = ggml_cast(ctx0, prefix_emb, GGML_TYPE_F32);
+            }
+            x = ggml_concat(ctx0, x, prefix_emb, 1);
         }
-        x = ggml_concat(ctx0, x, prefix_emb, 1);
     }
 
     ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+    ggml_set_input(positions);
     std::vector<int32_t> pos_vals(n_tokens);
     for (int32_t i = 0; i < n_tokens; ++i) pos_vals[i] = i;
 
@@ -812,7 +1065,12 @@ bool SlowARModel::fast_decode(const std::vector<float> & hidden_in,
         ggml_backend_tensor_set(prefix_ids, prefix_tokens.data(), 0,
                                 prefix_tokens.size() * sizeof(int32_t));
     }
+    if (prefix_emb_input) {
+        ggml_backend_tensor_set(prefix_emb_input, prefix_emb_vals.data(),
+                                0, prefix_emb_vals.size() * sizeof(float));
+    }
 
+    // Fast decoder — use same backend as main model (weights are there)
     if (ggml_backend_is_cpu(backend_)) {
         ggml_backend_cpu_set_n_threads(backend_, n_threads);
     }

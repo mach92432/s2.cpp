@@ -30,7 +30,9 @@ if(S2_METAL)
     set(GGML_METAL ON CACHE BOOL "" FORCE)
 endif()
 
-set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+if(S2_VULKAN)
+    set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+endif()
 
 add_subdirectory(ggml)
 

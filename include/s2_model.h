@@ -10,6 +10,9 @@
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 #include "gguf.h"
+#ifdef GGML_USE_CUDA
+#include "ggml-cuda.h"
+#endif
 #ifdef GGML_USE_VULKAN
 #include "ggml-vulkan.h"
 #endif
@@ -68,6 +71,16 @@ struct ModelHParams {
 struct ModelWeights {
     ggml_context * ctx_w = nullptr;
     ggml_backend_buffer_t model_buf = nullptr;
+    // CPU copies of all embedding tensors used by get_rows.
+    // CUDA get_rows kernel doesn't support Q4_K (and several other quantized types),
+    // so when the model backend is CUDA we keep host-side dequantizable copies and
+    // do the lookups manually on the CPU side before feeding the embedding result
+    // into the graph as an input tensor.
+    ggml_context * cpu_emb_ctx = nullptr;
+    ggml_backend_buffer_t cpu_emb_buf = nullptr;
+    ggml_tensor * embeddings_cpu          = nullptr;  // main token embeddings (slow AR)
+    ggml_tensor * codebook_embeddings_cpu = nullptr;  // per-codebook acoustic embeddings (slow AR)
+    ggml_tensor * fast_embeddings_cpu     = nullptr;  // prefix embeddings (fast AR)
 
     ggml_tensor * embeddings           = nullptr;
     ggml_tensor * codebook_embeddings  = nullptr;
@@ -121,8 +134,14 @@ private:
     ModelHParams   hparams_;
     ModelWeights   weights_;
     ggml_backend_t backend_      = nullptr;
+    ggml_backend_t cpu_backend_  = nullptr;
+    ggml_backend_sched_t sched_  = nullptr;
     ggml_gallocr_t allocr_       = nullptr;
     ggml_gallocr_t fast_allocr_  = nullptr;
+    // Persistent prefill allocr: claimed once (startup warm-up) and retained.
+    // Freeing it per-request meant re-allocating ~165MB from a full GPU at
+    // request time — the 2026-06 OOM that silently pushed all TTS to cloud.
+    ggml_gallocr_t prefill_allocr_ = nullptr;
     ggml_context * ctx_kv_      = nullptr;
     ggml_backend_buffer_t kv_buf_ = nullptr;
     ggml_tensor *  memory_k_   = nullptr;

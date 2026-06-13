@@ -55,9 +55,21 @@ private:
     int32_t     kv_cache_max_len_     = 0;
 
     // Reference audio and text management
+    // True when the codec runs on a GPU backend: decode is then chunked to
+    // bound the compute buffer (whole-clip = ~2.9GB for 512 frames). On CPU
+    // the buffer is plain RAM and chunking costs ~33% extra decode time
+    // (overlap re-decode), so whole-clip decode is used there.
+    bool codec_on_gpu_ = false;
+
     bool reference_loaded_ = false;
     std::string reference_embedding_;
     std::string reference_text_;
+
+    // Canonical silence VQ codes for the generation runway: produced at init
+    // by encoding digital silence and keeping middle frames (encoder edge
+    // windows excluded). Layout (num_codebooks, T) row-major like encode().
+    std::vector<int32_t> silence_codes_;
+    int32_t silence_frames_ = 0;
 };
 
 } // namespace s2

@@ -1,4 +1,7 @@
 #include "../include/s2_codec.h"
+#ifdef GGML_USE_CUDA
+#include "ggml-cuda.h"
+#endif
 #ifdef GGML_USE_VULKAN
 #include "ggml-vulkan.h"
 #endif
@@ -183,7 +186,8 @@ static ggml_tensor * lc_to_cl(ggml_context * ctx, ggml_tensor * x) {
 static ggml_tensor * causal_conv_1d(ggml_context * ctx,
                                      ggml_tensor * weight, ggml_tensor * bias,
                                      ggml_tensor * x, int stride, int dilation) {
-    if (weight->type != GGML_TYPE_F32) weight = ggml_cast(ctx, weight, GGML_TYPE_F32);
+    // ggml_conv_1d uses im2col which requires F16 kernel weights
+    if (weight->type != GGML_TYPE_F16) weight = ggml_cast(ctx, weight, GGML_TYPE_F16);
     if (bias   && bias->type   != GGML_TYPE_F32) bias   = ggml_cast(ctx, bias,   GGML_TYPE_F32);
     // Poids potentiellement aplati en 2D [in_ch*kernel, out_ch, 1] par la quantisation GGUF
     // → reshaper en 3D [kernel, in_ch, out_ch] attendu par ggml_conv_1d
@@ -200,6 +204,8 @@ static ggml_tensor * causal_conv_1d(ggml_context * ctx,
     const int extra = static_cast<int>(extra_padding_for_conv1d(x->ne[1], kernel_size, stride, pad));
     ggml_tensor * x_lc = cl_to_lc(ctx, x);
     x_lc = ggml_pad_ext(ctx, x_lc, pad, extra, 0, 0, 0, 0, 0, 0);
+    // CUDA im2col requires F32 input (CPU is lenient); mirror the cast in causal_conv_transpose_1d.
+    if (x_lc->type != GGML_TYPE_F32) x_lc = ggml_cast(ctx, x_lc, GGML_TYPE_F32);
     ggml_tensor * y = ggml_conv_1d(ctx, weight, x_lc, stride, 0, dilation);
     y = add_channel_bias_lc(ctx, y, bias);
     return lc_to_cl(ctx, y);
@@ -209,6 +215,7 @@ static ggml_tensor * causal_conv_1d(ggml_context * ctx,
 static ggml_tensor * causal_conv_transpose_1d(ggml_context * ctx,
                                                ggml_tensor * weight, ggml_tensor * bias,
                                                ggml_tensor * x, int stride, int crop_right) {
+    // CUDA conv_transpose_1d kernel asserts src0 (weight) == F32; CPU tolerates F16 but GPU does not.
     if (weight->type != GGML_TYPE_F32) weight = ggml_cast(ctx, weight, GGML_TYPE_F32);
     if (bias && bias->type != GGML_TYPE_F32) bias = ggml_cast(ctx, bias, GGML_TYPE_F32);
     // Poids aplati 2D [kernel*out_ch, in_ch, 1] → reshape 3D [kernel, out_ch, in_ch]
@@ -391,6 +398,7 @@ static ggml_tensor * build_convnext_block(ggml_context * ctx, ggml_context * ctx
 
     // depthwise conv (conv_1d on each channel independently)
     ggml_tensor * dw_w = req(prefix + ".dwconv.conv.weight");
+    if (dw_w->type != GGML_TYPE_F16) dw_w = ggml_cast(ctx, dw_w, GGML_TYPE_F16);
     ggml_tensor * dw_b = req(prefix + ".dwconv.conv.bias");
     const int kernel_size_dw = static_cast<int>(dw_w->ne[0]);
     const int pad_dw = kernel_size_dw - 1;
@@ -694,12 +702,29 @@ AudioCodec::~AudioCodec() {
 
 bool AudioCodec::load(const std::string & gguf_path, int32_t vulkan_device) {
     if (vulkan_device >= 0) {
+        // Vulkan FIRST for the codec (the flag is --codec-vulkan): the CUDA
+        // codec path is broken upstream — IM2COL invalid-argument abort in
+        // decode + oversized encode buffers (measured 2026-06-10). CUDA is
+        // kept only as a fallback when Vulkan isn't compiled/available.
 #ifdef GGML_USE_VULKAN
         impl_->backend = ggml_backend_vk_init(static_cast<size_t>(vulkan_device));
-        if (!impl_->backend) {
-            std::cerr << "[Codec] Vulkan init failed, falling back to CPU." << std::endl;
+        if (impl_->backend) {
+            std::cerr << "[Codec] Using Vulkan backend." << std::endl;
+        } else {
+            std::cerr << "[Codec] Vulkan init failed." << std::endl;
         }
 #endif
+#ifdef GGML_USE_CUDA
+        if (!impl_->backend) {
+            impl_->backend = ggml_backend_cuda_init(static_cast<size_t>(vulkan_device));
+            if (impl_->backend) {
+                std::cerr << "[Codec] Using CUDA backend (Vulkan unavailable)." << std::endl;
+            }
+        }
+#endif
+        if (!impl_->backend) {
+            std::cerr << "[Codec] GPU init failed, falling back to CPU." << std::endl;
+        }
     }
     if (!impl_->backend) impl_->backend = ggml_backend_cpu_init();
     if (!impl_->backend) { std::cerr << "[Codec] No backend." << std::endl; return false; }
